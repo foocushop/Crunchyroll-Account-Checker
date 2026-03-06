@@ -1,0 +1,5 @@
+requests
+flask
+gunicorn
+colorama
+# Ajoute ici les autres libs du repo original (ex: pystyle)
